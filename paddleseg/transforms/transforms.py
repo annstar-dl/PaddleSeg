@@ -18,7 +18,7 @@ import math
 import cv2
 import numpy as np
 from PIL import Image
-
+from scipy import signal
 from paddleseg.cvlibs import manager
 from paddleseg.transforms import functional
 from paddleseg.utils import logger
@@ -66,7 +66,8 @@ class Compose:
         elif isinstance(data['img'], str):
             img = cv2.imread(data['img'], self.read_flag)
             if img is None:
-                raise ValueError('Can\'t read The image file {}!'.format(data['img']))
+                raise ValueError(
+                    'Can\'t read The image file {}!'.format(data['img']))
             data['img'] = img.astype('float32')
         if not isinstance(data['img'], np.ndarray):
             raise TypeError(
@@ -84,9 +85,11 @@ class Compose:
             data['label'] = np.asarray(Image.open(data['label']))
             img_h, img_w = data['img'].shape[:2]
             if data['label'].shape[0] != img_h:
-                data['label'] = data['label'].reshape([-1, img_h, img_w]).transpose([1, 2, 0])
+                data['label'] = data['label'].reshape(
+                    [-1, img_h, img_w]).transpose([1, 2, 0])
             elif data['label'].shape[1] != img_w:
-                data['label'] = data['label'].reshape([img_h, -1, img_w]).transpose([0, 2, 1])
+                data['label'] = data['label'].reshape(
+                    [img_h, -1, img_w]).transpose([0, 2, 1])
 
         # the `trans_info` will save the process of image shape, and will be used in evaluation and prediction.
         if 'trans_info' not in data.keys():
@@ -122,6 +125,83 @@ class RandomHorizontalFlip:
                 data[key] = functional.horizontal_flip(data[key])
         return data
 
+@manager.TRANSFORMS.add_component
+class AddProteinNoise:
+    """
+    Add protein noise to an image.
+
+    Args:
+        noise_level (float, optional): The level of noise to be added. Default: 0.1.
+    """
+
+    def __init__(self, noise_level,only_bg,kernel_size=41, range1=0.2, range2=0.2):
+        self.noise_level = noise_level
+        self.only_bg = only_bg  # Add noise only to the background
+        self.kernel_size = kernel_size
+        self.range1 = range1
+        self.range2 = range2
+        self.h = self.noise_kernel(kernel_size, range1, range2)
+
+    def __call__(self, data):
+        # random chance of adding noise to the image with probability 0.5
+        if random.random() < 0.5:
+            noise_level = random.uniform(0, self.noise_level)
+            imgsize = data['img'].shape[:2]
+            if data['img'].ndim == 3:
+                nb_channels = data['img'].shape[2]
+            else:
+                nb_channels = 1
+                data["img"] = data["img"][:,:,np.newaxis]
+            alpha = 0.3 + 0.2 * np.random.uniform(low=-1.0, high=1.0)
+            img = data['img'] - np.mean(data['img'])
+            img_std = np.std(img.flatten())
+            noise1 = np.random.normal(size=imgsize)
+            noise2 = np.random.normal(size=imgsize)
+            noise = alpha * signal.convolve2d(noise1, self.h, mode='same') + (1 - alpha) * noise2
+            # Standardize the variance
+            noise_std = np.std(noise.flatten())
+            noise = (img_std / noise_std)*noise_level*noise
+
+            for i in range(nb_channels):
+                if self.only_bg:
+                    data['img'][:,:,i]=(data['img'][:,:,i]+noise)*(1-data['label'])+ data["img"][:,:,i]*data["label"] # Add noise only to the background
+                else:
+                    data['img'][:,:,i] = data['img'][:,:,i]+noise
+            if data["img"].shape[2]==1:
+                data["img"]=data["img"][:,:,0]
+        return data
+
+    def noise_kernel(self,kernel_size, range1, range2):
+        """
+        Generate a noise kernel based on the specified kernel size and ranges.
+        Args:
+            kernel_size (int): Size of the kernel.
+            range1 (float): Range for the first component of the noise.
+            range2 (float): Range for the second component of the noise.
+        Returns:
+            np.ndarray: The generated noise kernel.
+        """
+
+        sinc_dim_x = kernel_size
+        sinc_dim_y = kernel_size
+
+        x = np.linspace(-5, 5, sinc_dim_x)
+        y = np.linspace(-5, 5, sinc_dim_y)
+        x, y = np.meshgrid(x, y)
+        r = np.sqrt((x) ** 2 + (y) ** 2)
+
+        sigma = 3.0
+        omega = 0.70 + range1 * np.random.uniform(low=-1.0, high=1.0)
+        h1 = np.exp(-r ** 2 / (2 * sigma ** 2)) * np.sinc(omega * r)
+        h1 = h1 / np.max(h1.flatten())
+
+        sigma = 3.0
+        omega = 3.2 + range2 * np.random.uniform(low=-1.0, high=1.0)
+        h2 = np.exp(-r ** 2 / (2 * sigma ** 2)) * np.sinc(omega * r)
+        h2 = h2 / np.max(h2.flatten())
+
+        h = 1.0 * h1 + 2.0 * h2
+        return h
 
 @manager.TRANSFORMS.add_component
 class RandomVerticalFlip:
@@ -437,9 +517,9 @@ class Normalize:
 
     def __init__(self, mean=(0.5, ), std=(0.5, )):
         if not (isinstance(mean, (list, tuple)) and isinstance(std, (list, tuple))) \
-            and (len(mean) not in [1, 3]) and (len(std) not in [1, 3]):
+                and (len(mean) not in [1, 3]) and (len(std) not in [1, 3]):
             raise ValueError(
-                "{}: input type is invalid. It should be list or tuple with the lenght of 1 or 3".
+                "{}: input type is invalid. It should be list or tuple with the length of 1 or 3".
                 format(self))
         self.mean = np.array(mean)
         self.std = np.array(std)
@@ -450,6 +530,39 @@ class Normalize:
 
     def __call__(self, data):
         data['img'] = functional.normalize(data['img'], self.mean, self.std)
+        return data
+
+
+@manager.TRANSFORMS.add_component
+class Standardize:
+    """
+    Standardizes an image by zero centering and scales pixel intensities
+
+    Args:
+        sigma(float, optional): The Gaussian sigma value to be used. Default: 24.
+
+    Raises:
+        ValueError: When sigma is not a float.
+    """
+
+    def __init__(self, sigma=24.):
+        if not isinstance(sigma, float):
+            raise ValueError("sigma is invalid. It should be a float")
+        self.sigma = sigma
+
+    def __call__(self, data):
+
+        # zero center pixels
+        smooth = cv2.GaussianBlur(data['img'], (0, 0), sigmaX=self.sigma)
+        # ksize=(0,0) - kernel size derived from sigmaX
+        # sigmaY=None - set to sigmaX
+        # default borderType equal to cv2.BORDER_REFLECT_101
+        # src - https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html#gaabe8c836e97159a9193fb0b11ac52cf1
+        data['img'] = np.subtract(data['img'], smooth)
+        del smooth
+        # scale pixel intensities
+        data['img'] /= np.std(data['img'])
+
         return data
 
 
@@ -569,9 +682,9 @@ class RandomPaddingCrop:
         crop_size (tuple, optional): The target cropping size. Default: (512, 512).
         im_padding_value (float, optional): The padding value of raw image. Default: 127.5.
         label_padding_value (int, optional): The padding value of annotation image. Default: 255.
-        category_max_ratio (float, optional): The maximum ratio that single category could occupy. 
+        category_max_ratio (float, optional): The maximum ratio that single category could occupy.
             Default: 1.0.
-        ignore_index (int, optional): The value that should be ignored in the annotation image. 
+        ignore_index (int, optional): The value that should be ignored in the annotation image.
             Default: 255.
         loop_times (int, optional): The maximum number of attempts to crop an image. Default: 10.
 
@@ -664,10 +777,11 @@ class RandomPaddingCrop:
                 cnt = cnt[labels != self.ignore_index]
                 if len(cnt) > 1 and np.max(cnt) / np.sum(
                         cnt) < self.category_max_ratio:
+                    data['img'] = seg_temp
                     break
                 crop_coordinates = self._get_crop_coordinates(img_shape)
-
-        data['img'] = functional.crop(data['img'], crop_coordinates)
+        else:
+            data['img'] = functional.crop(data['img'], crop_coordinates)
         for key in data.get("gt_fields", []):
             data[key] = functional.crop(data[key], crop_coordinates)
 
@@ -718,7 +832,8 @@ class RandomCenterCrop:
             randh = np.random.randint(img_height * (1 - retain_height))
             offsetw = 0 if randw == 0 else np.random.randint(randw)
             offseth = 0 if randh == 0 else np.random.randint(randh)
-            p0, p1, p2, p3 = offseth, img_height + offseth - randh, offsetw, img_width + offsetw - randw
+            p0, p1, p2, p3 = offseth, img_height + offseth - \
+                randh, offsetw, img_width + offsetw - randw
             if data['img'].ndim == 2:
                 data['img'] = data['img'][p0:p1, p2:p3]
             else:
@@ -984,7 +1099,8 @@ class RandomScaleAspect:
                     if data['img'].ndim == 2:
                         data['img'] = data['img'][h1:(h1 + dh), w1:(w1 + dw)]
                     else:
-                        data['img'] = data['img'][h1:(h1 + dh), w1:(w1 + dw), :]
+                        data['img'] = data['img'][h1:(
+                            h1 + dh), w1:(w1 + dw), :]
                     data['img'] = cv2.resize(
                         data['img'], (img_width, img_height),
                         interpolation=cv2.INTER_LINEAR)
@@ -1205,7 +1321,7 @@ class GenerateInstanceTargets:
 
             masks = []
             for cid in classes:
-                masks.append(sem_seg_gt == cid)  # [C, H, W] 
+                masks.append(sem_seg_gt == cid)  # [C, H, W]
 
             shape = [self.num_classes - len(masks)] + list(data['label'].shape)
             masks_cpt = np.zeros(shape, dtype='int64')
@@ -1240,30 +1356,8 @@ class AddMultiLabelAuxiliaryCategory:
 
     def __call__(self, data):
         if 'label' in data:
-            aux_label = (data['label'].sum(axis=-1, keepdims=True) == 0).astype('uint8')
+            aux_label = (data['label'].sum(
+                axis=-1, keepdims=True) == 0).astype('uint8')
             data['label'] = np.concatenate([aux_label, data['label']], axis=-1)
 
-        return data
-
-
-@manager.TRANSFORMS.add_component
-class AddEdgeLabel:
-    y_k_size = 6
-    x_k_size = 6
-
-    def __init__(self, edge_size=4, ignore_index=255):
-        self.edge_size = edge_size
-        self.ignore_index = ignore_index
-
-    def __call__(self, data):
-        edge = cv2.Canny(data['label'], 0.1, 0.2)
-        kernel = np.ones((self.edge_size, self.edge_size), np.uint8)
-        edge = np.pad(
-            edge[self.y_k_size:-self.y_k_size, self.x_k_size:-self.x_k_size],
-            ((self.y_k_size, self.y_k_size), (self.x_k_size, self.x_k_size)),
-            mode='constant')
-        edge = (cv2.dilate(edge, kernel, iterations=1) > 50) * 1.0
-
-        data['gt_fields'].append('edge')
-        data['edge'] = edge
         return data
