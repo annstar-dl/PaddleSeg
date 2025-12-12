@@ -547,7 +547,6 @@ class StandardizeMAD:
         self.sigma = sigma
 
     def __call__(self, data):
-
         # zero center pixels
         smooth = cv2.GaussianBlur(data['img'], (0, 0), sigmaX=self.sigma)
         data['img'] = np.subtract(data['img'], smooth)
