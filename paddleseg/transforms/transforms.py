@@ -532,6 +532,29 @@ class Normalize:
         data['img'] = functional.normalize(data['img'], self.mean, self.std)
         return data
 
+@manager.TRANSFORMS.add_component
+class StandardizeMAD:
+    """
+    Standardizes an image by zero centering and scales pixel intensities using Median Absolute Deviation (MAD)
+
+    Args:
+        None
+
+    """
+    def __init__(self, sigma=30.):
+        if not isinstance(sigma, float):
+            raise ValueError("sigma is invalid. It should be a float")
+        self.sigma = sigma
+
+    def __call__(self, data):
+
+        # zero center pixels
+        smooth = cv2.GaussianBlur(data['img'], (0, 0), sigmaX=self.sigma)
+        data['img'] = np.subtract(data['img'], smooth)
+        # scale pixel intensities using MAD
+        mad = np.median(np.abs(data['img'] - np.median(data['img'])))
+        data['img'] = data['img'] / (mad + 1e-6)
+        return data
 
 @manager.TRANSFORMS.add_component
 class Standardize:
