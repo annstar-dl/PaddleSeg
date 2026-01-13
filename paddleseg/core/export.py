@@ -17,7 +17,7 @@ import paddle
 import yaml
 import json
 from copy import deepcopy
-
+from paddleseg.utils.env.paddle_env import is_paddle_ge_2_6_1
 from paddleseg.cvlibs import Config, SegBuilder
 from paddleseg.utils import logger, utils
 from paddleseg.utils.save_info import save_model_info, update_train_results
@@ -84,9 +84,11 @@ def export(args, model=None, save_dir=None, use_ema=False):
     output_dtype = 'int32' if args.output_op == 'argmax' else 'float32'
 
     # TODO add test config
+    file_graph_ext = ".json" if is_paddle_ge_2_6_1() else ".pdmodel"
+
     deploy_info = {
         'Deploy': {
-            'model': save_name + '.pdmodel',
+            'model': save_name + file_graph_ext,
             'params': save_name + '.pdiparams',
             'transforms': transforms,
             'input_shape': shape,
