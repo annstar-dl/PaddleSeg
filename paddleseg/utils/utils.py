@@ -298,3 +298,29 @@ def set_in_channels(model_cfg, in_channels):
     else:
         model_cfg['in_channels'] = in_channels
     return model_cfg
+
+
+def has_pdmodel_in_folder(folder_path):
+    """Check whether any immediate file in `folder_path` has a .pdmodel extension.
+
+    This checks only files directly under `folder_path` (non-recursive).
+
+    Args:
+        folder_path (str): Path to the folder to check.
+
+    Returns:
+        bool: True if at least one .pdmodel file exists in the folder, False otherwise.
+
+    Raises:
+        NotADirectoryError: If the provided path does not exist or is not a directory.
+    """
+    folder_path = os.path.expanduser(folder_path)
+    if not os.path.isdir(folder_path):
+        raise NotADirectoryError(f"Path {folder_path} is not a directory or does not exist")
+
+    for name in os.listdir(folder_path):
+        full = os.path.join(folder_path, name)
+        if os.path.isfile(full) and name.lower().endswith('.pdmodel'):
+            return True
+    return False
+

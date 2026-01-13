@@ -20,6 +20,7 @@ from copy import deepcopy
 
 from paddleseg.cvlibs import Config, SegBuilder
 from paddleseg.utils import logger, utils
+from paddleseg.utils.utils import has_pdmodel_in_folder
 from paddleseg.utils.save_info import save_model_info, update_train_results
 from paddleseg.deploy.export import WrappedModel
 
@@ -84,9 +85,10 @@ def export(args, model=None, save_dir=None, use_ema=False):
     output_dtype = 'int32' if args.output_op == 'argmax' else 'float32'
 
     # TODO add test config
+    file_graph_ext = '.pdmodel' if has_pdmodel_in_folder(save_dir) else '.json'
     deploy_info = {
         'Deploy': {
-            'model': save_name + '.pdmodel',
+            'model': save_name + file_graph_ext,
             'params': save_name + '.pdiparams',
             'transforms': transforms,
             'input_shape': shape,
